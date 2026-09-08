@@ -41,7 +41,7 @@ chmod +x collect-aap-scale-profile.sh
 Replace `<namespace>` with the value from Step 1. For example:
 
 ```bash
-./collect-aap-scale-profile.sh aap
+./collect-aap-scale-profile.sh <namespace>
 ```
 
 The script will display its progress and create a file named `aap-scale-profile-<date>.tar.gz` in your current directory.
