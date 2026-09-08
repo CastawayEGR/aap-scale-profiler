@@ -11,6 +11,7 @@ OUTPUT_FILE="aap-scale-profile-${TIMESTAMP}.tar.gz"
 SCRIPT_VERSION="1.0.0"
 AAP_VERSION_BRANCH=""
 AAP_INSTANCE=""
+CONTROLLER_NAME=""
 CONTROLLER_POD=""
 CONTROLLER_CONTAINER=""
 GATEWAY_POD=""
@@ -26,6 +27,43 @@ success() { echo "[OK]    $*"; }
 warn()    { echo "[WARN]  $*"; ERRORS=$((ERRORS + 1)); }
 die()     { echo "[ERROR] $*" >&2; exit 1; }
 
+query_text_has_error() {
+    local content="${1:-}"
+    [[ -n "$content" ]] && grep -qiE '(^ERROR:|^FATAL:|syntax error|does not exist|permission denied)' <<< "$content"
+}
+
+query_file_has_error() {
+    local file="$1"
+    [[ -s "$file" ]] && grep -qiE '(^ERROR:|^FATAL:|syntax error|does not exist|permission denied)' "$file"
+}
+
+finalize_query_output() {
+    local label="$1" outfile="$2" errtmp="$3"
+
+    if [[ -s "$errtmp" ]]; then
+        if [[ ! -s "$outfile" ]]; then
+            cat "$errtmp" > "$outfile"
+        elif grep -qiE 'error|fatal|denied|not found|terminated' "$errtmp"; then
+            warn "$label stderr: $(grep -v '^$' "$errtmp" | tail -3 | tr '\n' ' ')"
+        fi
+    fi
+
+    if [[ ! -s "$outfile" ]]; then
+        warn "$label produced no output — file will be empty in the bundle."
+        echo "ERROR: query produced no output" > "$outfile"
+        return 1
+    fi
+
+    if query_file_has_error "$outfile"; then
+        warn "$label output contains SQL errors."
+        warn "  Detail: $(grep -iE 'ERROR:|FATAL:|syntax error|does not exist' "$outfile" | head -3 | tr '\n' ' ')"
+        return 1
+    fi
+
+    success "$label"
+    return 0
+}
+
 # ── preflight ─────────────────────────────────────────────────────────────────
 
 preflight() {
@@ -33,6 +71,25 @@ preflight() {
     command -v jq  &>/dev/null     || die "'jq' not found. Install jq and try again."
     oc whoami &>/dev/null          || die "Not logged in to an OpenShift cluster. Run 'oc login' first."
     oc get namespace "$NAMESPACE" &>/dev/null || die "Namespace '$NAMESPACE' not found on this cluster."
+    discover_aap_instance
+    oc auth can-i create pods/exec -n "$NAMESPACE" 2>/dev/null | grep -qx 'yes' \
+        || die "Insufficient permissions: cannot exec into pods in namespace '$NAMESPACE'."
+}
+
+verify_dbshell() {
+    local pod="$1" container="$2" manage_cmd="$3" label="$4"
+    local errtmp result
+    errtmp=$(mktemp)
+    info "Preflight: verifying ${label} database connectivity..."
+    if ! result=$(oc exec -i "$pod" -n "$NAMESPACE" -c "$container" -- \
+            "$manage_cmd" dbshell <<< "SELECT 1;" 2>"$errtmp"); then
+        die "${label} database connectivity check failed: $(grep -v '^$' "$errtmp" | tail -3 | tr '\n' ' ')"
+    fi
+    if query_text_has_error "$result" || ! grep -qE '(^|[[:space:]])1([[:space:]]|$|\|)' <<< "$result"; then
+        die "${label} database connectivity check returned unexpected output."
+    fi
+    rm -f "$errtmp"
+    success "${label} database connectivity OK"
 }
 
 # ── pod discovery ─────────────────────────────────────────────────────────────
@@ -45,15 +102,41 @@ discover_aap_instance() {
     info "AAP instance:    $AAP_INSTANCE"
 }
 
-discover_controller() {
+discover_controller_name() {
+    [[ -n "$CONTROLLER_NAME" ]] && return
     discover_aap_instance
-    CONTROLLER_POD=$(oc get pods -n "$NAMESPACE" \
-        -l "app.kubernetes.io/name=${AAP_INSTANCE}-controller-task" \
-        --field-selector=status.phase=Running \
-        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    CONTROLLER_NAME=$(oc get aap "$AAP_INSTANCE" -n "$NAMESPACE" \
+        -o jsonpath='{.spec.controller.name}' 2>/dev/null)
+    [[ -n "$CONTROLLER_NAME" ]] || \
+        CONTROLLER_NAME=$(oc get aap "$AAP_INSTANCE" -n "$NAMESPACE" \
+            -o jsonpath='{.status.controller}' 2>/dev/null)
+    CONTROLLER_NAME="${CONTROLLER_NAME:-$AAP_INSTANCE}"
+    info "Controller name: $CONTROLLER_NAME"
+}
+
+discover_controller() {
+    discover_controller_name
+    local label
+    for label in "${CONTROLLER_NAME}-controller-task" "${CONTROLLER_NAME}-task"; do
+        CONTROLLER_POD=$(oc get pods -n "$NAMESPACE" \
+            -l "app.kubernetes.io/name=${label}" \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        [[ -n "$CONTROLLER_POD" ]] && break
+    done
     [[ -n "$CONTROLLER_POD" ]] \
-        || die "No running controller task pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE})."
-    CONTROLLER_CONTAINER="${AAP_INSTANCE}-controller-task"
+        || die "No running controller task pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE}, controller: ${CONTROLLER_NAME})."
+
+    for container in $(oc get pod "$CONTROLLER_POD" -n "$NAMESPACE" \
+            -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n'); do
+        if oc exec "$CONTROLLER_POD" -n "$NAMESPACE" -c "$container" -- \
+                sh -c 'command -v awx-manage' &>/dev/null 2>&1; then
+            CONTROLLER_CONTAINER="$container"
+            break
+        fi
+    done
+    [[ -n "$CONTROLLER_CONTAINER" ]] \
+        || die "Could not find a container with awx-manage in pod '$CONTROLLER_POD'."
     info "Controller pod:  $CONTROLLER_POD (container: $CONTROLLER_CONTAINER)"
 }
 
@@ -69,7 +152,7 @@ discover_gateway() {
     for container in $(oc get pod "$GATEWAY_POD" -n "$NAMESPACE" \
             -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n'); do
         if oc exec "$GATEWAY_POD" -n "$NAMESPACE" -c "$container" -- \
-                which aap-gateway-manage &>/dev/null 2>&1; then
+                sh -c 'command -v aap-gateway-manage' &>/dev/null 2>&1; then
             GATEWAY_CONTAINER="$container"
             break
         fi
@@ -83,22 +166,21 @@ discover_gateway() {
 
 run_controller_query() {
     local label="$1" sql="$2" outfile="$3" hint="${4:-}"
+    local errtmp
+    errtmp=$(mktemp)
     info "Collecting: $label${hint:+ ($hint)}"
 
     if ! oc exec -i "$CONTROLLER_POD" -n "$NAMESPACE" -c "$CONTROLLER_CONTAINER" -- \
-            awx-manage dbshell <<< "$sql" > "$WORKDIR/$outfile" 2>/dev/null; then
+            awx-manage dbshell <<< "$sql" > "$WORKDIR/$outfile" 2>"$errtmp"; then
         warn "$label failed — pod may have restarted. Retrying with fresh pod discovery."
         discover_controller
+        : > "$errtmp"
         oc exec -i "$CONTROLLER_POD" -n "$NAMESPACE" -c "$CONTROLLER_CONTAINER" -- \
-            awx-manage dbshell <<< "$sql" > "$WORKDIR/$outfile" 2>/dev/null || true
+            awx-manage dbshell <<< "$sql" > "$WORKDIR/$outfile" 2>"$errtmp" || true
     fi
 
-    if [[ -s "$WORKDIR/$outfile" ]]; then
-        success "$label"
-    else
-        warn "$label produced no output — file will be empty in the bundle."
-        echo "ERROR: query produced no output" > "$WORKDIR/$outfile"
-    fi
+    finalize_query_output "$label" "$WORKDIR/$outfile" "$errtmp" || true
+    rm -f "$errtmp"
 }
 
 run_gateway_query() {
@@ -111,21 +193,12 @@ run_gateway_query() {
             aap-gateway-manage dbshell <<< "$sql" > "$WORKDIR/$outfile" 2>"$errtmp"; then
         warn "$label failed — pod may have restarted. Retrying with fresh pod discovery."
         discover_gateway
+        : > "$errtmp"
         oc exec -i "$GATEWAY_POD" -n "$NAMESPACE" -c "$GATEWAY_CONTAINER" -- \
             aap-gateway-manage dbshell <<< "$sql" > "$WORKDIR/$outfile" 2>"$errtmp" || true
     fi
 
-    if [[ -s "$WORKDIR/$outfile" ]]; then
-        success "$label"
-    else
-        warn "$label produced no output — file will be empty in the bundle."
-        if [[ -s "$errtmp" ]]; then
-            warn "  Error detail: $(grep -v '^$' "$errtmp" | tail -5)"
-            cat "$errtmp" > "$WORKDIR/$outfile"
-        else
-            echo "ERROR: query produced no output" > "$WORKDIR/$outfile"
-        fi
-    fi
+    finalize_query_output "$label" "$WORKDIR/$outfile" "$errtmp" || true
     rm -f "$errtmp"
 }
 
@@ -221,26 +294,28 @@ collect_gateway() {
 # ── metadata ──────────────────────────────────────────────────────────────────
 
 replica_count() {
-    local deployment="$1" cr_jsonpath="$2"
-    local count
-    count=$(oc get deployment "$deployment" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null)
-    if [[ -z "$count" ]]; then
-        count=$(oc get aap -n "$NAMESPACE" -o jsonpath="$cr_jsonpath" 2>/dev/null)
-    fi
-    echo "${count:-unknown}"
+    local deployment count
+    for deployment in "$@"; do
+        count=$(oc get deployment "$deployment" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+        [[ -n "$count" ]] && { echo "$count"; return; }
+    done
+    echo "unknown"
 }
 
 collect_metadata() {
     info "Collecting metadata..."
     local aap_version ocp_version node_count cluster_name
     discover_aap_instance
+    discover_controller_name
     aap_version=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].status.version}' 2>/dev/null || echo "unknown")
     ocp_version=$(oc version -o json 2>/dev/null | jq -r '.openshiftVersion' 2>/dev/null || echo "unknown")
     node_count=$(oc get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
     cluster_name=$(oc config current-context 2>/dev/null || echo "unknown")
-    task_replicas=$(replica_count "${AAP_INSTANCE}-controller-task" '{.items[0].spec.controller.task_replicas}')
-    web_replicas=$(replica_count "${AAP_INSTANCE}-controller-web" '{.items[0].spec.controller.web_replicas}')
-    gateway_replicas=$(replica_count "${AAP_INSTANCE}-gateway" '{.items[0].spec.api.replicas}')
+    task_replicas=$(replica_count \
+        "${CONTROLLER_NAME}-controller-task" "${CONTROLLER_NAME}-task")
+    web_replicas=$(replica_count \
+        "${CONTROLLER_NAME}-controller-web" "${CONTROLLER_NAME}-web")
+    gateway_replicas=$(replica_count "${AAP_INSTANCE}-gateway")
 
     cat > "$WORKDIR/metadata.txt" <<EOF
 === AAP Scale Profile Metadata ===
@@ -253,6 +328,8 @@ Controller Task Replicas: ${task_replicas}
 Controller Web Replicas: ${web_replicas}
 Gateway Replicas: ${gateway_replicas}
 AAP Namespace: ${NAMESPACE}
+AAP Instance: ${AAP_INSTANCE}
+Controller Name: ${CONTROLLER_NAME}
 AAP Version Branch: ${AAP_VERSION_BRANCH}
 Script Version: ${SCRIPT_VERSION}
 EOF
@@ -281,11 +358,13 @@ main() {
 
     preflight
     discover_controller
+    verify_dbshell "$CONTROLLER_POD" "$CONTROLLER_CONTAINER" awx-manage "Controller"
     detect_version
     collect_controller
 
     if [[ "$AAP_VERSION_BRANCH" == "2.5+" ]]; then
         discover_gateway
+        verify_dbshell "$GATEWAY_POD" "$GATEWAY_CONTAINER" aap-gateway-manage "Gateway"
         collect_gateway
     fi
 
