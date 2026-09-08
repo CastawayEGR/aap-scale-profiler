@@ -10,6 +10,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 OUTPUT_FILE="aap-scale-profile-${TIMESTAMP}.tar.gz"
 SCRIPT_VERSION="1.0.0"
 AAP_VERSION_BRANCH=""
+AAP_INSTANCE=""
 CONTROLLER_POD=""
 CONTROLLER_CONTAINER=""
 GATEWAY_POD=""
@@ -35,20 +36,34 @@ preflight() {
 
 # ── pod discovery ─────────────────────────────────────────────────────────────
 
+discover_aap_instance() {
+    [[ -n "$AAP_INSTANCE" ]] && return
+    AAP_INSTANCE=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [[ -n "$AAP_INSTANCE" ]] \
+        || die "No AnsibleAutomationPlatform resource found in namespace '$NAMESPACE'."
+    info "AAP instance:    $AAP_INSTANCE"
+}
+
 discover_controller() {
-    CONTROLLER_POD=$(oc get pods -n "$NAMESPACE" 2>/dev/null \
-        | awk '/aap-controller-task.*Running/ {print $1; exit}')
+    discover_aap_instance
+    CONTROLLER_POD=$(oc get pods -n "$NAMESPACE" \
+        -l "app.kubernetes.io/name=${AAP_INSTANCE}-controller-task" \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [[ -n "$CONTROLLER_POD" ]] \
-        || die "No running aap-controller-task pod found in namespace '$NAMESPACE'."
-    CONTROLLER_CONTAINER="aap-controller-task"
+        || die "No running controller task pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE})."
+    CONTROLLER_CONTAINER="${AAP_INSTANCE}-controller-task"
     info "Controller pod:  $CONTROLLER_POD (container: $CONTROLLER_CONTAINER)"
 }
 
 discover_gateway() {
-    GATEWAY_POD=$(oc get pods -n "$NAMESPACE" 2>/dev/null \
-        | awk '/^aap-gateway-.*Running/ && !/operator/ {print $1; exit}')
+    discover_aap_instance
+    GATEWAY_POD=$(oc get pods -n "$NAMESPACE" \
+        -l "app.kubernetes.io/component=aap-gateway,app.kubernetes.io/part-of=${AAP_INSTANCE}" \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [[ -n "$GATEWAY_POD" ]] \
-        || die "No running aap-gateway pod found in namespace '$NAMESPACE'."
+        || die "No running gateway pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE})."
 
     GATEWAY_CONTAINER=$(oc get pod "$GATEWAY_POD" -n "$NAMESPACE" \
         -o jsonpath='{.spec.containers[*].name}' 2>/dev/null \
@@ -153,7 +168,7 @@ collect_controller() {
         "job-distribution.txt"
 
     run_controller_query "Job Events" \
-        "SELECT (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t) AS median_job_events_per_job_30d, (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t) AS p90_job_events_per_job_30d;" \
+        "SELECT COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t), 0) AS median_job_events_per_job_30d, COALESCE((SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t), 0) AS p90_job_events_per_job_30d;" \
         "job-events.txt" \
         "scanning 30 days of jobs, may take a little longer on large environments"
 
@@ -193,22 +208,33 @@ collect_gateway() {
         "gateway-rbac-distribution.txt"
 
     run_gateway_query "Gateway Organization/Team Distribution" \
-        "SELECT (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY role_count) FROM (SELECT COUNT(DISTINCT rua.role_definition_id) as role_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM django_content_type WHERE app_label='aap_gateway_api' AND model='organization') GROUP BY o.id) t) AS median_roles_per_org, (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY role_count) FROM (SELECT COUNT(DISTINCT rua.role_definition_id) as role_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM django_content_type WHERE app_label='aap_gateway_api' AND model='organization') GROUP BY o.id) t) AS p90_roles_per_org, (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) as user_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM django_content_type WHERE app_label='aap_gateway_api' AND model='organization') GROUP BY o.id) t) AS median_users_per_org, (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) as user_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM django_content_type WHERE app_label='aap_gateway_api' AND model='organization') GROUP BY o.id) t) AS p90_users_per_org, (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY team_count) FROM (SELECT COUNT(DISTINCT t.id) as team_count FROM aap_gateway_api_organization o LEFT JOIN aap_gateway_api_team t ON t.organization_id = o.id GROUP BY o.id) t) AS median_teams_per_org, (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY team_count) FROM (SELECT COUNT(DISTINCT t.id) as team_count FROM aap_gateway_api_organization o LEFT JOIN aap_gateway_api_team t ON t.organization_id = o.id GROUP BY o.id) t) AS p90_teams_per_org, (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) as user_count FROM aap_gateway_api_team t LEFT JOIN dab_rbac_roleuserassignment rua ON rua.object_id = t.id::text AND rua.content_type_id = (SELECT id FROM django_content_type WHERE app_label='aap_gateway_api' AND model='team') GROUP BY t.id) t2) AS median_users_per_team, (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) as user_count FROM aap_gateway_api_team t LEFT JOIN dab_rbac_roleuserassignment rua ON rua.object_id = t.id::text AND rua.content_type_id = (SELECT id FROM django_content_type WHERE app_label='aap_gateway_api' AND model='team') GROUP BY t.id) t2) AS p90_users_per_team;" \
+        "SELECT COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY role_count) FROM (SELECT COUNT(DISTINCT rua.role_definition_id) AS role_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON ((rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization')) OR EXISTS (SELECT 1 FROM dab_rbac_objectrole orole WHERE orole.id = rua.object_role_id AND orole.object_id = o.id::text AND orole.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization'))) GROUP BY o.id) t), 0) AS median_roles_per_org, COALESCE((SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY role_count) FROM (SELECT COUNT(DISTINCT rua.role_definition_id) AS role_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON ((rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization')) OR EXISTS (SELECT 1 FROM dab_rbac_objectrole orole WHERE orole.id = rua.object_role_id AND orole.object_id = o.id::text AND orole.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization'))) GROUP BY o.id) t), 0) AS p90_roles_per_org, COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) AS user_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON ((rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization')) OR EXISTS (SELECT 1 FROM dab_rbac_objectrole orole WHERE orole.id = rua.object_role_id AND orole.object_id = o.id::text AND orole.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization'))) GROUP BY o.id) t), 0) AS median_users_per_org, COALESCE((SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) AS user_count FROM aap_gateway_api_organization o LEFT JOIN dab_rbac_roleuserassignment rua ON ((rua.object_id = o.id::text AND rua.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization')) OR EXISTS (SELECT 1 FROM dab_rbac_objectrole orole WHERE orole.id = rua.object_role_id AND orole.object_id = o.id::text AND orole.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='organization'))) GROUP BY o.id) t), 0) AS p90_users_per_org, COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY team_count) FROM (SELECT COUNT(DISTINCT t.id) AS team_count FROM aap_gateway_api_organization o LEFT JOIN aap_gateway_api_team t ON t.organization_id = o.id GROUP BY o.id) t), 0) AS median_teams_per_org, COALESCE((SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY team_count) FROM (SELECT COUNT(DISTINCT t.id) AS team_count FROM aap_gateway_api_organization o LEFT JOIN aap_gateway_api_team t ON t.organization_id = o.id GROUP BY o.id) t), 0) AS p90_teams_per_org, COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) AS user_count FROM aap_gateway_api_team t LEFT JOIN dab_rbac_roleuserassignment rua ON ((rua.object_id = t.id::text AND rua.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='team')) OR EXISTS (SELECT 1 FROM dab_rbac_objectrole orole WHERE orole.id = rua.object_role_id AND orole.object_id = t.id::text AND orole.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='team'))) GROUP BY t.id) t2), 0) AS median_users_per_team, COALESCE((SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY user_count) FROM (SELECT COUNT(DISTINCT rua.user_id) AS user_count FROM aap_gateway_api_team t LEFT JOIN dab_rbac_roleuserassignment rua ON ((rua.object_id = t.id::text AND rua.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='team')) OR EXISTS (SELECT 1 FROM dab_rbac_objectrole orole WHERE orole.id = rua.object_role_id AND orole.object_id = t.id::text AND orole.content_type_id = (SELECT id FROM dab_rbac_dabcontenttype WHERE app_label='aap_gateway_api' AND model='team'))) GROUP BY t.id) t2), 0) AS p90_users_per_team;" \
         "gateway-distribution.txt"
 }
 
 # ── metadata ──────────────────────────────────────────────────────────────────
 
+replica_count() {
+    local deployment="$1" cr_jsonpath="$2"
+    local count
+    count=$(oc get deployment "$deployment" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    if [[ -z "$count" ]]; then
+        count=$(oc get aap -n "$NAMESPACE" -o jsonpath="$cr_jsonpath" 2>/dev/null)
+    fi
+    echo "${count:-unknown}"
+}
+
 collect_metadata() {
     info "Collecting metadata..."
     local aap_version ocp_version node_count cluster_name
+    discover_aap_instance
     aap_version=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].status.version}' 2>/dev/null || echo "unknown")
     ocp_version=$(oc version -o json 2>/dev/null | jq -r '.openshiftVersion' 2>/dev/null || echo "unknown")
     node_count=$(oc get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
     cluster_name=$(oc config current-context 2>/dev/null || echo "unknown")
-    task_replicas=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].spec.controller.task_replicas}' 2>/dev/null); task_replicas="${task_replicas:-unknown}"
-    web_replicas=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].spec.controller.web_replicas}' 2>/dev/null); web_replicas="${web_replicas:-unknown}"
-    gateway_replicas=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].spec.api.replicas}' 2>/dev/null); gateway_replicas="${gateway_replicas:-unknown}"
+    task_replicas=$(replica_count "${AAP_INSTANCE}-controller-task" '{.items[0].spec.controller.task_replicas}')
+    web_replicas=$(replica_count "${AAP_INSTANCE}-controller-web" '{.items[0].spec.controller.web_replicas}')
+    gateway_replicas=$(replica_count "${AAP_INSTANCE}-gateway" '{.items[0].spec.api.replicas}')
 
     cat > "$WORKDIR/metadata.txt" <<EOF
 === AAP Scale Profile Metadata ===
