@@ -247,9 +247,9 @@ collect_controller() {
         "job-distribution.txt"
 
     run_controller_query "Job Events" \
-        "SELECT COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t), 0) AS median_job_events_per_job_30d, COALESCE((SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t), 0) AS p90_job_events_per_job_30d;" \
+        "SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count), 0) AS median_job_events_per_job, COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count), 0) AS p90_job_events_per_job FROM (SELECT COUNT(je.id) AS event_count FROM (SELECT unifiedjob_ptr_id FROM main_job ORDER BY unifiedjob_ptr_id DESC LIMIT 500) j LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id GROUP BY j.unifiedjob_ptr_id) t;" \
         "job-events.txt" \
-        "scanning 30 days of jobs, may take a little longer on large environments"
+        "sampling 500 most recent jobs"
 
     if [[ "$AAP_VERSION_BRANCH" == "2.4" ]]; then
         run_controller_query "Controller RBAC Distribution" \
