@@ -10,6 +10,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 OUTPUT_FILE="aap-scale-profile-${TIMESTAMP}.tar.gz"
 SCRIPT_VERSION="1.0.0"
 AAP_VERSION_BRANCH=""
+AAP_INSTANCE=""
 CONTROLLER_POD=""
 CONTROLLER_CONTAINER=""
 GATEWAY_POD=""
@@ -35,20 +36,34 @@ preflight() {
 
 # ── pod discovery ─────────────────────────────────────────────────────────────
 
+discover_aap_instance() {
+    [[ -n "$AAP_INSTANCE" ]] && return
+    AAP_INSTANCE=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [[ -n "$AAP_INSTANCE" ]] \
+        || die "No AnsibleAutomationPlatform resource found in namespace '$NAMESPACE'."
+    info "AAP instance:    $AAP_INSTANCE"
+}
+
 discover_controller() {
-    CONTROLLER_POD=$(oc get pods -n "$NAMESPACE" 2>/dev/null \
-        | awk '/aap-controller-task.*Running/ {print $1; exit}')
+    discover_aap_instance
+    CONTROLLER_POD=$(oc get pods -n "$NAMESPACE" \
+        -l "app.kubernetes.io/name=${AAP_INSTANCE}-controller-task" \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [[ -n "$CONTROLLER_POD" ]] \
-        || die "No running aap-controller-task pod found in namespace '$NAMESPACE'."
-    CONTROLLER_CONTAINER="aap-controller-task"
+        || die "No running controller task pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE})."
+    CONTROLLER_CONTAINER="${AAP_INSTANCE}-controller-task"
     info "Controller pod:  $CONTROLLER_POD (container: $CONTROLLER_CONTAINER)"
 }
 
 discover_gateway() {
-    GATEWAY_POD=$(oc get pods -n "$NAMESPACE" 2>/dev/null \
-        | awk '/^aap-gateway-.*Running/ && !/operator/ {print $1; exit}')
+    discover_aap_instance
+    GATEWAY_POD=$(oc get pods -n "$NAMESPACE" \
+        -l "app.kubernetes.io/component=aap-gateway,app.kubernetes.io/part-of=${AAP_INSTANCE}" \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [[ -n "$GATEWAY_POD" ]] \
-        || die "No running aap-gateway pod found in namespace '$NAMESPACE'."
+        || die "No running gateway pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE})."
 
     GATEWAY_CONTAINER=$(oc get pod "$GATEWAY_POD" -n "$NAMESPACE" \
         -o jsonpath='{.spec.containers[*].name}' 2>/dev/null \
