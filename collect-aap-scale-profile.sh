@@ -29,7 +29,8 @@ die()     { echo "[ERROR] $*" >&2; exit 1; }
 # ── preflight ─────────────────────────────────────────────────────────────────
 
 preflight() {
-    command -v oc &>/dev/null      || die "'oc' not found. Install the OpenShift CLI and try again."
+    command -v oc  &>/dev/null     || die "'oc' not found. Install the OpenShift CLI and try again."
+    command -v jq  &>/dev/null     || die "'jq' not found. Install jq and try again."
     oc whoami &>/dev/null          || die "Not logged in to an OpenShift cluster. Run 'oc login' first."
     oc get namespace "$NAMESPACE" &>/dev/null || die "Namespace '$NAMESPACE' not found on this cluster."
 }
@@ -65,11 +66,16 @@ discover_gateway() {
     [[ -n "$GATEWAY_POD" ]] \
         || die "No running gateway pod found in namespace '$NAMESPACE' (instance: ${AAP_INSTANCE})."
 
-    GATEWAY_CONTAINER=$(oc get pod "$GATEWAY_POD" -n "$NAMESPACE" \
-        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null \
-        | tr ' ' '\n' | grep -E '^(api|aap-gateway)$' | head -1)
+    for container in $(oc get pod "$GATEWAY_POD" -n "$NAMESPACE" \
+            -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n'); do
+        if oc exec "$GATEWAY_POD" -n "$NAMESPACE" -c "$container" -- \
+                which aap-gateway-manage &>/dev/null 2>&1; then
+            GATEWAY_CONTAINER="$container"
+            break
+        fi
+    done
     [[ -n "$GATEWAY_CONTAINER" ]] \
-        || die "Could not determine gateway container name in pod '$GATEWAY_POD'."
+        || die "Could not find a container with aap-gateway-manage in pod '$GATEWAY_POD'."
     info "Gateway pod:     $GATEWAY_POD (container: $GATEWAY_CONTAINER)"
 }
 
