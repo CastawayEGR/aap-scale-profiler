@@ -55,8 +55,7 @@ finalize_query_output() {
     fi
 
     if query_file_has_error "$outfile"; then
-        warn "$label output contains SQL errors."
-        warn "  Detail: $(grep -iE 'ERROR:|FATAL:|syntax error|does not exist' "$outfile" | head -3 | tr '\n' ' ')"
+        warn "$label output contains SQL errors: $(grep -iE 'ERROR:|FATAL:|syntax error|does not exist' "$outfile" | head -1 | tr -d '\n')"
         return 1
     fi
 
@@ -253,11 +252,11 @@ collect_controller() {
 
     if [[ "$AAP_VERSION_BRANCH" == "2.4" ]]; then
         run_controller_query "Controller RBAC Distribution" \
-            "SELECT COUNT(DISTINCT cr.id) AS role_definition_count, COUNT(DISTINCT cur.id) AS role_user_assignment_count, COUNT(DISTINCT ctr.id) AS role_team_assignment_count FROM controller_role cr FULL OUTER JOIN controller_user_role cur ON TRUE FULL OUTER JOIN controller_team_role ctr ON TRUE;" \
+            "SELECT (SELECT COUNT(*) FROM controller_role) AS role_definition_count, (SELECT COUNT(*) FROM controller_user_role) AS role_user_assignment_count, (SELECT COUNT(*) FROM controller_team_role) AS role_team_assignment_count;" \
             "controller-rbac-distribution.txt"
     else
         run_controller_query "Controller RBAC Distribution" \
-            "SELECT COUNT(DISTINCT re.id) AS role_evaluation_count, COUNT(DISTINCT rua.id) AS role_user_assignment_count, COUNT(DISTINCT rta.id) AS role_team_assignment_count FROM dab_rbac_roleevaluation re FULL OUTER JOIN dab_rbac_roleuserassignment rua ON TRUE FULL OUTER JOIN dab_rbac_roleteamassignment rta ON TRUE;" \
+            "SELECT (SELECT COUNT(*) FROM dab_rbac_roleevaluation) AS role_evaluation_count, (SELECT COUNT(*) FROM dab_rbac_roleuserassignment) AS role_user_assignment_count, (SELECT COUNT(*) FROM dab_rbac_roleteamassignment) AS role_team_assignment_count;" \
             "controller-rbac-distribution.txt"
     fi
 
@@ -378,12 +377,12 @@ main() {
         echo "All queries succeeded."
     fi
     echo ""
-    echo -e "\033[1mOptional:\033[0m review what's included before sending."
+    printf '\033[1mOptional:\033[0m review what'\''s included before sending.\n'
     echo "  List files:         tar -tzf $OUTPUT_FILE"
     echo "  Print all files:       tar -xOzf $OUTPUT_FILE | less"
     echo "  Print a single file:       tar -xOzf $OUTPUT_FILE ./<filename>.txt"
     echo ""
-    echo -e "\033[1mNext step:\033[0m attach $OUTPUT_FILE to your Red Hat support case."
+    printf '\033[1mNext step:\033[0m attach %s to your Red Hat support case.\n' "$OUTPUT_FILE"
     echo ""
 }
 
