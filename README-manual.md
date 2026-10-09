@@ -320,7 +320,7 @@ cd ~/aap-collection
 cat > metadata.txt <<EOF
 === AAP Scale Profile Metadata ===
 Collection Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-Cluster Name: $(oc config current-context)
+Cluster Name: $(oc whoami --show-server)
 OpenShift Version: $(oc version -o json | jq -r '.openshiftVersion')
 Node Count: $(oc get nodes --no-headers | wc -l)
 AAP Version: $(oc get aap -n $NAMESPACE -o jsonpath='{.items[0].status.version}')

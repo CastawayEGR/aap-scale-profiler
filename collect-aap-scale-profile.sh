@@ -309,7 +309,7 @@ collect_metadata() {
     aap_version=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].status.version}' 2>/dev/null || echo "unknown")
     ocp_version=$(oc version -o json 2>/dev/null | jq -r '.openshiftVersion' 2>/dev/null || echo "unknown")
     node_count=$(oc get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    cluster_name=$(oc config current-context 2>/dev/null || echo "unknown")
+    cluster_name=$(oc whoami --show-server 2>/dev/null || echo "unknown")
     task_replicas=$(replica_count \
         "${CONTROLLER_NAME}-controller-task" "${CONTROLLER_NAME}-task")
     web_replicas=$(replica_count \
