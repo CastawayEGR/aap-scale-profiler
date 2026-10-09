@@ -207,7 +207,7 @@ oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
 ```bash
 oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
   awx-manage dbshell \
-  <<< "SELECT version() AS pg_version, (SELECT setting FROM pg_settings WHERE name = 'max_connections') AS max_connections, (SELECT setting FROM pg_settings WHERE name = 'work_mem') AS work_mem, (SELECT setting FROM pg_settings WHERE name = 'shared_buffers') AS shared_buffers, (SELECT setting FROM pg_settings WHERE name = 'effective_cache_size') AS effective_cache_size, (SELECT setting FROM pg_settings WHERE name = 'checkpoint_completion_target') AS checkpoint_completion_target, (SELECT setting FROM pg_settings WHERE name = 'wal_buffers') AS wal_buffers, (SELECT setting FROM pg_settings WHERE name = 'maintenance_work_mem') AS maintenance_work_mem, (SELECT setting FROM pg_settings WHERE name = 'random_page_cost') AS random_page_cost, (SELECT setting FROM pg_settings WHERE name = 'effective_io_concurrency') AS effective_io_concurrency;" \
+  <<< "SELECT version() AS pg_version, current_setting('max_connections') AS max_connections, current_setting('work_mem') AS work_mem, current_setting('shared_buffers') AS shared_buffers, current_setting('effective_cache_size') AS effective_cache_size, current_setting('checkpoint_completion_target') AS checkpoint_completion_target, current_setting('wal_buffers') AS wal_buffers, current_setting('maintenance_work_mem') AS maintenance_work_mem, current_setting('random_page_cost') AS random_page_cost, current_setting('effective_io_concurrency') AS effective_io_concurrency;" \
   > ./infrastructure-config.txt 2>/dev/null
 ```
 
