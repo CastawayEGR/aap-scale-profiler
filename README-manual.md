@@ -198,7 +198,7 @@ oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
 ```bash
 oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
   awx-manage dbshell \
-  <<< "SELECT COUNT(DISTINCT re.id) AS role_evaluation_count, COUNT(DISTINCT rua.id) AS role_user_assignment_count, COUNT(DISTINCT rta.id) AS role_team_assignment_count FROM dab_rbac_roleevaluation re FULL OUTER JOIN dab_rbac_roleuserassignment rua ON TRUE FULL OUTER JOIN dab_rbac_roleteamassignment rta ON TRUE;" \
+  <<< "SELECT (SELECT COUNT(*) FROM dab_rbac_roleevaluation) AS role_evaluation_count, (SELECT COUNT(*) FROM dab_rbac_roleuserassignment) AS role_user_assignment_count, (SELECT COUNT(*) FROM dab_rbac_roleteamassignment) AS role_team_assignment_count;" \
   > ./controller-rbac-distribution.txt 2>/dev/null
 ```
 
