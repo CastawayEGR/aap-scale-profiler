@@ -1,6 +1,6 @@
 # AAP Scale Profiler
 
-This script profiles your AAP environment by collecting read-only aggregate metrics. It takes about 5 minutes to run and can help with capacity planning, workload analysis, and understanding your environment's scale. Results can also be shared with Red Hat Support if needed.
+This script profiles your AAP environment by collecting read-only aggregate metrics. It typically takes 1–2 minutes to run and can help with capacity planning, workload analysis, and understanding your environment's scale. Results can also be shared with Red Hat Support if needed.
 
 ---
 
@@ -87,7 +87,7 @@ The script collects **aggregate metrics only** — no names, no credentials, no 
 ✅ Collected:
 - Table bloat statistics
 - Organization, inventory, host, project, and job template counts
-- Job volume and event distribution (last 30 days)
+- Job volume (last 30 days) and event distribution (500 most recent jobs)
 - RBAC assignment counts
 - PostgreSQL configuration settings
 

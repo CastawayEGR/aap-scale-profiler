@@ -173,12 +173,12 @@ oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
 
 #### Command 6: Job Events
 
-> This query scans 30 days of job history and may take longer on large environments — this is normal.
+> This query samples the 500 most recent jobs.
 
 ```bash
 oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
   awx-manage dbshell \
-  <<< "SELECT (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t) AS median_job_events_per_job_30d, (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count) FROM (SELECT COUNT(je.id) AS event_count FROM main_job j JOIN main_unifiedjob uj ON uj.id = j.unifiedjob_ptr_id LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id WHERE uj.started >= CURRENT_DATE - INTERVAL '30 days' GROUP BY j.unifiedjob_ptr_id) t) AS p90_job_events_per_job_30d;" \
+  <<< "SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count), 0) AS median_job_events_per_job, COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count), 0) AS p90_job_events_per_job FROM (SELECT uj.id, uj.created FROM main_unifiedjob uj JOIN main_job j ON j.unifiedjob_ptr_id = uj.id ORDER BY uj.id DESC LIMIT 500) j CROSS JOIN LATERAL (SELECT COUNT(*) AS event_count FROM main_jobevent je WHERE je.job_id = j.id AND je.job_created = j.created) c;" \
   > ./job-events.txt 2>/dev/null
 ```
 

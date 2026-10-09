@@ -246,7 +246,7 @@ collect_controller() {
         "job-distribution.txt"
 
     run_controller_query "Job Events" \
-        "SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count), 0) AS median_job_events_per_job, COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count), 0) AS p90_job_events_per_job FROM (SELECT COUNT(je.id) AS event_count FROM (SELECT unifiedjob_ptr_id FROM main_job ORDER BY unifiedjob_ptr_id DESC LIMIT 500) j LEFT JOIN main_jobevent je ON je.job_id = j.unifiedjob_ptr_id GROUP BY j.unifiedjob_ptr_id) t;" \
+        "SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY event_count), 0) AS median_job_events_per_job, COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY event_count), 0) AS p90_job_events_per_job FROM (SELECT uj.id, uj.created FROM main_unifiedjob uj JOIN main_job j ON j.unifiedjob_ptr_id = uj.id ORDER BY uj.id DESC LIMIT 500) j CROSS JOIN LATERAL (SELECT COUNT(*) AS event_count FROM main_jobevent je WHERE je.job_id = j.id AND je.job_created = j.created) c;" \
         "job-events.txt" \
         "sampling 500 most recent jobs"
 
