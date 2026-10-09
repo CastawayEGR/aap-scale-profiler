@@ -226,7 +226,7 @@ collect_controller() {
     echo "=== Controller Queries ==="
 
     run_controller_query "Bloat Metrics" \
-        "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_analyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
+        "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
         "bloat-controller.txt"
 
     run_controller_query "Inventory Distribution" \
@@ -278,7 +278,7 @@ collect_gateway() {
     echo "=== Gateway Queries ==="
 
     run_gateway_query "Gateway Bloat Metrics" \
-        "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_analyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
+        "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
         "bloat-gateway.txt"
 
     run_gateway_query "Gateway RBAC Distribution" \

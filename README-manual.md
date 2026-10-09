@@ -131,7 +131,7 @@ cd ~/aap-collection
 ```bash
 oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
   awx-manage dbshell \
-  <<< "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_analyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
+  <<< "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
   > ./bloat-controller.txt 2>/dev/null
 ```
 
@@ -278,7 +278,7 @@ All commands run from your **local machine**.
 ```bash
 oc exec $GATEWAY_POD -n $NAMESPACE -c $GATEWAY_CONTAINER -- \
   aap-gateway-manage dbshell \
-  <<< "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_analyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
+  <<< "SELECT schemaname, relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_dead_tup DESC;" \
   > ~/aap-collection/bloat-gateway.txt 2>/dev/null
 ```
 
