@@ -20,6 +20,8 @@ oc get aap -A
 
 Note the value in the NAMESPACE column. You will use it in Step 3.
 
+On AAP 2.4 the command above returns nothing. Use `oc get automationcontroller -A` instead.
+
 ---
 
 ## Step 2: Download the Script
@@ -108,7 +110,7 @@ Install the OpenShift CLI: https://docs.openshift.com/container-platform/latest/
 Run `oc login` with your cluster URL and credentials, then re-run the script.
 
 **"Namespace not found"**
-Verify the namespace with `oc get aap -A` and use the exact value shown.
+Verify the namespace with `oc get aap -A` (AAP 2.4: `oc get automationcontroller -A`) and use the exact value shown.
 
 **A query produced an empty file**
 The script will still create the bundle. Send it to Red Hat along with a note about which query failed.

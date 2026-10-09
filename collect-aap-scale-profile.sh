@@ -11,6 +11,7 @@ OUTPUT_FILE="aap-scale-profile-${TIMESTAMP}.tar.gz"
 SCRIPT_VERSION="1.0.0"
 AAP_VERSION_BRANCH=""
 AAP_INSTANCE=""
+AAP_KIND="aap"
 CONTROLLER_NAME=""
 CONTROLLER_POD=""
 CONTROLLER_CONTAINER=""
@@ -96,9 +97,14 @@ verify_dbshell() {
 discover_aap_instance() {
     [[ -n "$AAP_INSTANCE" ]] && return
     AAP_INSTANCE=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -z "$AAP_INSTANCE" ]]; then
+        # AAP 2.4 has no AnsibleAutomationPlatform resource; the AutomationController is the top-level resource
+        AAP_KIND="automationcontroller"
+        AAP_INSTANCE=$(oc get automationcontroller -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    fi
     [[ -n "$AAP_INSTANCE" ]] \
-        || die "No AnsibleAutomationPlatform resource found in namespace '$NAMESPACE'."
-    info "AAP instance:    $AAP_INSTANCE"
+        || die "No AnsibleAutomationPlatform or AutomationController resource found in namespace '$NAMESPACE'."
+    info "AAP instance:    $AAP_INSTANCE ($AAP_KIND)"
 }
 
 discover_controller_name() {
@@ -252,7 +258,7 @@ collect_controller() {
 
     if [[ "$AAP_VERSION_BRANCH" == "2.4" ]]; then
         run_controller_query "Controller RBAC Distribution" \
-            "SELECT (SELECT COUNT(*) FROM controller_role) AS role_definition_count, (SELECT COUNT(*) FROM controller_user_role) AS role_user_assignment_count, (SELECT COUNT(*) FROM controller_team_role) AS role_team_assignment_count;" \
+            "SELECT (SELECT COUNT(*) FROM main_rbac_roles) AS role_definition_count, (SELECT COUNT(*) FROM main_rbac_roles_members) AS role_user_assignment_count, (SELECT COUNT(*) FROM main_rbac_roles_parents p JOIN main_team t ON t.member_role_id = p.to_role_id WHERE p.from_role_id <> t.read_role_id) AS role_team_assignment_count;" \
             "controller-rbac-distribution.txt"
     else
         run_controller_query "Controller RBAC Distribution" \
@@ -266,7 +272,7 @@ collect_controller() {
 
     if [[ "$AAP_VERSION_BRANCH" == "2.4" ]]; then
         run_controller_query "User/Team/Org Distribution" \
-            "SELECT (SELECT COUNT(*) FROM main_user) AS total_users, (SELECT COUNT(*) FROM main_team) AS total_teams, (SELECT COUNT(*) FROM main_organization) AS total_organizations, (SELECT COUNT(*) FROM controller_user_role) AS role_user_assignment_count, (SELECT COUNT(*) FROM controller_team_role) AS role_team_assignment_count, (SELECT COUNT(*) FROM controller_role) AS total_roles;" \
+            "SELECT (SELECT COUNT(*) FROM auth_user) AS total_users, (SELECT COUNT(*) FROM main_team) AS total_teams, (SELECT COUNT(*) FROM main_organization) AS total_organizations, (SELECT COUNT(*) FROM main_rbac_roles_members) AS role_user_assignment_count, (SELECT COUNT(*) FROM main_rbac_roles_parents p JOIN main_team t ON t.member_role_id = p.to_role_id WHERE p.from_role_id <> t.read_role_id) AS role_team_assignment_count, (SELECT COUNT(*) FROM main_rbac_roles) AS total_roles;" \
             "user-org-distribution.txt"
     fi
 }
@@ -306,7 +312,7 @@ collect_metadata() {
     local aap_version ocp_version node_count cluster_name
     discover_aap_instance
     discover_controller_name
-    aap_version=$(oc get aap -n "$NAMESPACE" -o jsonpath='{.items[0].status.version}' 2>/dev/null || echo "unknown")
+    aap_version=$(oc get "$AAP_KIND" "$AAP_INSTANCE" -n "$NAMESPACE" -o jsonpath='{.status.version}' 2>/dev/null || echo "unknown")
     ocp_version=$(oc version -o json 2>/dev/null | jq -r '.openshiftVersion' 2>/dev/null || echo "unknown")
     node_count=$(oc get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
     cluster_name=$(oc whoami --show-server 2>/dev/null || echo "unknown")
@@ -328,6 +334,7 @@ Controller Web Replicas: ${web_replicas}
 Gateway Replicas: ${gateway_replicas}
 AAP Namespace: ${NAMESPACE}
 AAP Instance: ${AAP_INSTANCE}
+AAP Resource Kind: ${AAP_KIND}
 Controller Name: ${CONTROLLER_NAME}
 AAP Version Branch: ${AAP_VERSION_BRANCH}
 Script Version: ${SCRIPT_VERSION}

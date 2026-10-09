@@ -50,11 +50,11 @@ oc get aap -A
 
 Note the NAMESPACE column.
 
-If the above returns no results, try:
+If the above returns no results, you are likely on AAP 2.4, which has no AnsibleAutomationPlatform resource. Use:
 ```bash
-oc get pods -A | grep aap-controller
+oc get automationcontroller -A
 ```
-Note the value in the left-side column.
+Note the NAMESPACE column.
 
 ### Find a Controller Pod
 
@@ -190,7 +190,7 @@ Use the variant that matches your version detection result from Step 3.
 ```bash
 oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
   awx-manage dbshell \
-  <<< "SELECT COUNT(DISTINCT cr.id) AS role_definition_count, COUNT(DISTINCT cur.id) AS role_user_assignment_count, COUNT(DISTINCT ctr.id) AS role_team_assignment_count FROM controller_role cr FULL OUTER JOIN controller_user_role cur ON TRUE FULL OUTER JOIN controller_team_role ctr ON TRUE;" \
+  <<< "SELECT (SELECT COUNT(*) FROM main_rbac_roles) AS role_definition_count, (SELECT COUNT(*) FROM main_rbac_roles_members) AS role_user_assignment_count, (SELECT COUNT(*) FROM main_rbac_roles_parents p JOIN main_team t ON t.member_role_id = p.to_role_id WHERE p.from_role_id <> t.read_role_id) AS role_team_assignment_count;" \
   > ./controller-rbac-distribution.txt 2>/dev/null
 ```
 
@@ -218,7 +218,7 @@ If you are on AAP 2.5 or later, skip this command — that data comes from the G
 ```bash
 oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
   awx-manage dbshell \
-  <<< "SELECT (SELECT COUNT(*) FROM main_user) AS total_users, (SELECT COUNT(*) FROM main_team) AS total_teams, (SELECT COUNT(*) FROM main_organization) AS total_organizations, (SELECT COUNT(*) FROM controller_user_role) AS role_user_assignment_count, (SELECT COUNT(*) FROM controller_team_role) AS role_team_assignment_count, (SELECT COUNT(*) FROM controller_role) AS total_roles;" \
+  <<< "SELECT (SELECT COUNT(*) FROM auth_user) AS total_users, (SELECT COUNT(*) FROM main_team) AS total_teams, (SELECT COUNT(*) FROM main_organization) AS total_organizations, (SELECT COUNT(*) FROM main_rbac_roles_members) AS role_user_assignment_count, (SELECT COUNT(*) FROM main_rbac_roles_parents p JOIN main_team t ON t.member_role_id = p.to_role_id WHERE p.from_role_id <> t.read_role_id) AS role_team_assignment_count, (SELECT COUNT(*) FROM main_rbac_roles) AS total_roles;" \
   > ./user-org-distribution.txt 2>/dev/null
 ```
 
@@ -333,6 +333,13 @@ EOF
 cat metadata.txt
 ```
 
+On AAP 2.4, use these lines instead for the version and replicas, and omit Gateway Replicas:
+```bash
+AAP Version: $(oc get automationcontroller -n $NAMESPACE -o jsonpath='{.items[0].status.version}')
+Controller Task Replicas: $(oc get automationcontroller -n $NAMESPACE -o jsonpath='{.items[0].spec.task_replicas}')
+Controller Web Replicas: $(oc get automationcontroller -n $NAMESPACE -o jsonpath='{.items[0].spec.web_replicas}')
+```
+
 ### Bundle Results
 
 ```bash
@@ -395,7 +402,7 @@ oc exec $CONTROLLER_POD -n $NAMESPACE -c $CONTROLLER_CONTAINER -- \
 ```
 
 If you used the correct variant and still see the error, contact your Red Hat support representative with:
-- Your AAP version: `oc get aap -n $NAMESPACE -o jsonpath='{.items[0].status.version}'`
+- Your AAP version: `oc get aap -n $NAMESPACE -o jsonpath='{.items[0].status.version}'` (AAP 2.4: `oc get automationcontroller -n $NAMESPACE -o jsonpath='{.items[0].status.version}'`)
 - The full error message
 - Which command number failed (Command 1-9 for Controller, 1-3 for Gateway)
 
